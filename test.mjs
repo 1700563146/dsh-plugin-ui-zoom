@@ -19,7 +19,8 @@ const reactStub = {
 /** 造一个「假浏览器 + 假 ctx」，按真实 Cordis 规则限制服务访问。 */
 function makeEnv({ withShortcuts }) {
   const env = {
-    zoom: {},
+    zoom: {},        // documentElement.style（正文栏宽度变量写在这里）
+    appStyle: {},    // #root.style（zoom / width / height 写在这里）
     store: new Map(),
     handlers: {},
     slots: [],
@@ -40,8 +41,15 @@ function makeEnv({ withShortcuts }) {
         removeProperty: (name) => { delete env.zoom[name]; },
       },
     },
-    // 应用根节点由各用例按需造：有的引擎里 zoom 不放大布局视口，要量一次才知道
-    getElementById: () => env.app,
+    // 缩放的目标是 #root，不是 documentElement：浮层 portal 到 body，必须留在缩放之外
+    getElementById: (id) => (id === 'root' ? env.app : null),
+  };
+  env.app = {
+    style: {
+      setProperty: (name, value) => { env.appStyle[name] = value; },
+      removeProperty: (name) => { delete env.appStyle[name]; },
+    },
+    getBoundingClientRect: () => ({ width: 1600 }),
   };
   globalThis.window = {
     innerWidth: 1600,
@@ -128,7 +136,7 @@ function makeEnv({ withShortcuts }) {
   assert.equal(env.slots[0].name, 'conversation.composer.dock');
   assert.equal(env.slots[0].id, 'ui-zoom');
   assert.equal(env.buttons()[1].children[0], '100%');
-  assert.equal(env.zoom.zoom, undefined, '100% 时不该写 zoom 属性');
+  assert.equal(env.appStyle.zoom, undefined, '100% 时不该写 zoom 属性');
 
   // 三条命令注册进了宿主的快捷键中心
   assert.deepEqual(env.commands.map((c) => c.id), ['ui-zoom.in', 'ui-zoom.out', 'ui-zoom.reset']);
@@ -141,32 +149,32 @@ function makeEnv({ withShortcuts }) {
   assert.deepEqual(env.commands[0].defaults['web:windows'], { code: 'Equal', modifiers: ['primary', 'alt'] });
 
   env.commands[0].resolve({}).run();
-  assert.equal(env.zoom.zoom, '1.05');
+  assert.equal(env.appStyle.zoom, '1.05');
   env.commands[2].resolve({}).run();
-  assert.equal(env.zoom.zoom, undefined);
+  assert.equal(env.appStyle.zoom, undefined);
 
   // Ctrl+滚轮：阈值、方向、deltaMode、preventDefault
   env.wheel({ ctrlKey: true, deltaY: -30 });
-  assert.equal(env.zoom.zoom, undefined, '没过阈值不该动');
+  assert.equal(env.appStyle.zoom, undefined, '没过阈值不该动');
   assert.equal(env.prevented, 1, '按住 ctrl 时要阻止页面滚动');
   env.wheel({ ctrlKey: true, deltaY: -30 });
-  assert.equal(env.zoom.zoom, '1.05', '累计过阈值向上放大');
+  assert.equal(env.appStyle.zoom, '1.05', '累计过阈值向上放大');
   env.wheel({ ctrlKey: true, deltaY: 60 });
-  assert.equal(env.zoom.zoom, undefined, '向下滚回 100%（100% 不写属性）');
+  assert.equal(env.appStyle.zoom, undefined, '向下滚回 100%（100% 不写属性）');
   const quiet = env.prevented;
   env.wheel({ deltaY: -60 });
   assert.equal(env.prevented, quiet, '没按 ctrl 不该接管');
   env.wheel({ ctrlKey: true, deltaMode: 1, deltaY: 2 });   // 2 行 ≈ 32px
   env.wheel({ ctrlKey: true, deltaMode: 1, deltaY: 2 });   // 累计 64px → 缩小
-  assert.equal(env.zoom.zoom, '0.95');
+  assert.equal(env.appStyle.zoom, '0.95');
   assert.deepEqual(env.handlers.wheel.options, { passive: false });
 
   // 夹取
   for (let i = 0; i < 40; i += 1) env.buttons()[2].props.onClick();
-  assert.equal(env.zoom.zoom, '1.6');
+  assert.equal(env.appStyle.zoom, '1.6');
   assert.equal(env.buttons()[2].props.disabled, true);
   for (let i = 0; i < 40; i += 1) env.buttons()[0].props.onClick();
-  assert.equal(env.zoom.zoom, '0.7');
+  assert.equal(env.appStyle.zoom, '0.7');
   assert.equal(env.buttons()[0].props.disabled, true);
   assert.equal(env.store.get('dsh-ui-zoom'), '0.7');
 
@@ -174,36 +182,27 @@ function makeEnv({ withShortcuts }) {
   // 当前 0.7 → 920 / 0.7 ≈ 1314
   assert.equal(env.zoom['--dsh-chat-user-width'], 'min(calc(100% - 32px), 1314px)');
   env.commands[2].resolve({}).run();               // 复位
-  assert.equal(env.zoom.zoom, undefined);
+  assert.equal(env.appStyle.zoom, undefined);
   assert.equal(env.zoom['--dsh-chat-user-width'], undefined, '回到 100% 要把这个覆盖摘掉');
 
-  // 应用根节点已经铺满窗口时：不要动宽高
-  {
-    const style = env.makeApp([1600, 1600]);
-    env.commands[1].resolve({}).run();             // 1.00 → 0.95
-    assert.equal(style.width, undefined, '铺满了就不该补宽高');
-  }
+  // 缩放目标是 #root（浮层 portal 到 body，必须留在缩放之外）；宽高始终反向补偿，
+  // 否则 #root 的 height:100% 被乘上 zoom 后会溢出窗口
+  for (let i = 0; i < 40; i += 1) env.buttons()[0].props.onClick();   // 回到下限 0.7
+  assert.equal(env.appStyle.zoom, '0.7');
+  assert.equal(env.appStyle.width, 'calc(100% / 0.7)', '要补宽，盒子才铺满窗口');
+  assert.equal(env.appStyle.height, 'calc(100% / 0.7)', '要补高');
+  env.commands[2].resolve({}).run();               // 复位
+  assert.equal(env.appStyle.zoom, undefined);
+  assert.equal(env.appStyle.width, undefined, '回到 100% 要把补偿摘掉');
+  assert.equal(env.appStyle.height, undefined);
 
-  // 没铺满（zoom 只缩了盒子、布局视口没放大）：补上 1/zoom，补完真的铺满 → 保留
-  {
-    env.commands[2].resolve({}).run();             // 回到 1.00
-    const style = env.makeApp([1520, 1600]);
-    env.commands[1].resolve({}).run();             // 1.00 → 0.95
-    assert.equal(style.width, 'calc(100% / 0.95)', '没铺满要补宽');
-  }
-
-  // 补了还是不对 → 撤回，宁可原样
-  {
-    env.commands[2].resolve({}).run();
-    const style = env.makeApp([1520, 1520]);
-    env.commands[1].resolve({}).run();             // 1.00 → 0.95
-    assert.equal(style.width, undefined, '补了没用就要撤回去');
-  }
+  // 关键回归：缩放绝不能加在 documentElement 上，否则 body 里的浮层会被二次缩放而出屏
+  assert.equal(env.zoom.zoom, undefined, 'documentElement 上不允许有 zoom');
 
   // 卸载
   env.commands[2].resolve({}).run();
   for (const cleanup of env.cleanups.splice(0)) if (typeof cleanup === 'function') cleanup();
-  assert.equal(env.zoom.zoom, undefined, '卸载要还原文档缩放');
+  assert.equal(env.appStyle.zoom, undefined, '卸载要还原文档缩放');
   assert.equal(env.handlers.wheel, undefined, '卸载要摘掉滚轮监听');
   assert.equal(env.commands.every((c) => c.disposed), true, '卸载要注销快捷键命令');
 
@@ -216,18 +215,18 @@ function makeEnv({ withShortcuts }) {
   await import(`${pathToFileURL('./client.js').href}?without-shortcuts`);
 
   // 关键：不能因此抛异常，插件必须照常激活
-  assert.equal(env.zoom.zoom, undefined);
+  assert.equal(env.appStyle.zoom, undefined);
   assert.equal(env.slots.length, 1, '胶囊控件仍要注册');
   assert.equal(env.commands.length, 0, '没有服务就不该注册命令');
   assert.equal(env.handlers.keydown, undefined, '不能退回去抢键盘，会和别的插件重复触发');
 
   env.wheel({ ctrlKey: true, deltaY: -60 });
-  assert.equal(env.zoom.zoom, '1.05', '滚轮通道不依赖快捷键中心');
+  assert.equal(env.appStyle.zoom, '1.05', '滚轮通道不依赖快捷键中心');
   env.buttons()[2].props.onClick();
-  assert.equal(env.zoom.zoom, '1.1', '胶囊通道也不依赖它');
+  assert.equal(env.appStyle.zoom, '1.1', '胶囊通道也不依赖它');
 
   for (const cleanup of env.cleanups.splice(0)) if (typeof cleanup === 'function') cleanup();
-  assert.equal(env.zoom.zoom, undefined);
+  assert.equal(env.appStyle.zoom, undefined);
 
   console.log('ui-zoom: 快捷键中心缺席 —— 通过（优雅降级）');
 }

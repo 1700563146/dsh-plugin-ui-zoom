@@ -33,9 +33,18 @@ dsh plugin --profile <profile> add dsh-plugin-ui-zoom
 
 `Mod` 在 macOS 是 `⌘`、在 Windows/Linux 是 `Ctrl`。三条命令都能在 DSH 的快捷键面板（`Mod+/`）里改；插件走 `ctx.shortcuts` 注册，所以重复或重叠的键位会被宿主拒绝，而不是静默地触发两次。
 
-## 为什么缩放文档根节点
+## 为什么缩放 `#root` 而不是整个文档
 
-DSH 的字号大多是硬编码像素，没有 `rem` 阶梯，所以改设计 token 覆盖不到整个界面。`document.documentElement` 上的 `zoom` 参与布局，布局视口、`position: fixed` 的菜单和遮罩、命中测试都会跟着走 —— 而 `transform: scale()` 会造出一个假的包含块，把 fixed 元素困在里头。
+DSH 的字号大多是硬编码像素，没有 `rem` 阶梯，所以改设计 token 覆盖不到整个界面。`zoom` 参与布局，命中测试和固定元素都会跟着走 —— 而 `transform: scale()` 会造出一个假的包含块，把 fixed 元素困在里头。
+
+缩放加在 `#root` 上，**不是** `document.documentElement`，这是关键：
+
+- 宿主的浮层全部 portal 到 `document.body`（`MenuSurface` → `createPortal(list, document.body)`、`HoverCard` → `createPortal(content, document.body)`），第三方插件复用同一套组件，也在其中。
+- 它们用 `getBoundingClientRect()`（屏幕物理像素）算位置，再写回 `left`/`top`。
+- 如果缩放范围包含 `body`，这个像素值会在缩放坐标系里被二次放大 —— 120% 时菜单就往右下偏 20%，跑出屏幕。
+- 把 `body` 留在缩放之外，坐标数学恢复正常。
+
+又因为 `zoom` 不会放大布局视口，`#root` 还要补 `width`/`height: calc(100% / zoom)`，盒子才仍然铺满窗口。
 
 ## 兼容性
 
@@ -45,9 +54,9 @@ DSH 的字号大多是硬编码像素，没有 `rem` 阶梯，所以改设计 to
 
 ## 已知限制
 
+- **浮层不跟着缩放。** 菜单、下拉、悬停卡片保持 100% 尺寸，因为它们在缩放范围之外；在没有宿主级页面缩放的前提下，「位置正确」和「尺寸一致」不可兼得，这里选位置正确。
 - 手动拖过会话列宽后，宿主会写自己的内联宽度，优先级高于本插件的补偿；那时缩小仍会等比缩放。
 - 在真实浏览器标签页里（Web 模式），`Ctrl+滚轮` 是浏览器的页面缩放，页面拦不住；那种环境请用带 `Alt` 的键位。
-- 缩放的是文档根节点，所以宿主控件也会一起缩放 —— 和浏览器缩放一致。
 
 ## 许可
 

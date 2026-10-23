@@ -1,11 +1,15 @@
 /**
- * 界面缩放：把整个文档根节点等比放大/缩小，等于浏览器 Ctrl+ 的效果。
+ * 界面缩放：把应用内容（#root）等比放大/缩小。
  *
- * 为什么落在 document.documentElement 的 zoom 上：
+ * 为什么用 zoom、为什么加在 #root 而不是 documentElement：
  * - 宿主的字号大多是硬编码像素（`font-size:12px`），没有 rem 阶梯，改 token 只能覆盖
  *   少数几处，做不到「整界面」。
- * - zoom 参与布局，布局视口、固定定位的菜单/遮罩、命中测试都会跟着变；而 transform:scale
- *   会造出一个假的包含块，把 fixed 元素困在里面。
+ * - zoom 参与布局，固定的菜单/遮罩、命中测试都会跟着变；而 transform:scale 会造出一个
+ *   假的包含块，把 fixed 元素困在里面。
+ * - **关键**：宿主的浮层全部 portal 到 document.body。若缩放加在 documentElement 上，
+ *   body 也被缩放，浮层按 getBoundingClientRect（屏幕物理像素）算出来的 left/top 会写进
+ *   一个被缩放的坐标系、被二次放大 —— 120% 就往右下偏 20%，菜单和悬停卡片跑出屏幕。
+ *   加在 #root 上，body 留在缩放之外，坐标数学恢复正常；代价是浮层自身不跟着缩放。
  *
  * 两条硬规矩（都踩过）：
  * 1. 访问别的服务的属性前必须声明依赖：Cordis 对「已定义但没 inject 的服务」会直接抛
@@ -84,9 +88,23 @@ window.__ModuleLoader__.load({
     const listeners = new Set();
     let current = DEFAULT;
 
+    // 缩放加在 #root（应用内容）而不是 documentElement 上，这是关键。
+    // 宿主所有的浮层都 portal 到 document.body：
+    //   MenuSurface  createPortal(list, document.body)     ← 模型切换等菜单
+    //   HoverCard    createPortal(content, document.body)  ← 悬停卡片（含第三方插件的）
+    // 它们用 getBoundingClientRect 算坐标（拿到的是屏幕物理像素），再写回 style.left。
+    // 如果缩放范围包含 body，这个 px 会在缩放坐标系里被二次放大：120% 就往右下偏 20%，
+    // 于是浮层跑出屏幕。把 body 留在缩放之外，坐标数学就恢复正常。
+    //
+    // 代价：浮层不跟着缩放（120% 的界面上，菜单仍是 100% 大小）。这是刻意的取舍 ——
+    // 位置正确 > 尺寸一致。
+    function appRoot() {
+      return document.getElementById('root');
+    }
+
     // 宿主正文栏的宽度是写死的：
     //   --dsh-chat-content-width: var(--dsh-chat-user-width, clamp(680px, 栏宽 * .64, 920px))
-    // 也就是说 920px 是硬上限。整页 zoom 缩小时，这条 920px 的栏在物理上跟着缩小
+    // 也就是说 920px 是硬上限。缩放缩小时，这条 920px 的栏在物理上跟着缩小
     // （窗格没变），于是「字变小了、左右空白更大」，缩得越多越像一条窄带。
     // 这里把上限按 1/zoom 放大，让栏的物理宽度保持不变 —— 缩小时是「一行塞更多字」，
     // 而不是「把整条栏缩小」。用户自己拖过宽度时宿主会写内联样式，那时以用户的为准。
@@ -103,35 +121,22 @@ window.__ModuleLoader__.load({
       style.setProperty('--dsh-chat-user-width', `min(calc(100% - 32px), ${cap}px)`);
     }
 
-    // 有些引擎里 zoom 只缩元素自身的盒子，布局视口不变，应用就不会铺满窗口，
-    // 四周留白。这里量一次再决定补不补宽高 —— 只有真的没铺满才动，撤得干净。
-    function syncFill(scale) {
-      const app = document.getElementById('root');
+    function paint(scale) {
+      const app = appRoot();
       if (!app) return;
-      app.style.removeProperty('width');
-      app.style.removeProperty('height');
-      if (scale === 1) return;
 
-      const viewport = window.innerWidth;
-      if (viewport <= 0) return;
-      if (app.getBoundingClientRect().width >= viewport * 0.98) return; // 已经铺满，不用管
-
-      app.style.setProperty('width', `calc(100% / ${scale})`);
-      app.style.setProperty('height', `calc(100% / ${scale})`);
-      const fixed = app.getBoundingClientRect().width;
-      if (fixed < viewport * 0.98 || fixed > viewport * 1.05) {
-        // 补了还是不对（可能有别的约束）：撤回，宁可维持原样也不要半吊子布局
+      if (scale === 1) {
+        app.style.removeProperty('zoom');
         app.style.removeProperty('width');
         app.style.removeProperty('height');
+      } else {
+        app.style.setProperty('zoom', String(scale));
+        // zoom 只乘元素自身的盒子，不会放大布局视口，所以要反向补偿宽高，
+        // 让这个盒子缩放后仍然正好铺满窗口（#root 原本是 height:100%）。
+        app.style.setProperty('width', `calc(100% / ${scale})`);
+        app.style.setProperty('height', `calc(100% / ${scale})`);
       }
-    }
-
-    function paint(scale) {
-      const root = document.documentElement;
-      if (scale === 1) root.style.removeProperty('zoom');
-      else root.style.setProperty('zoom', String(scale));
       syncContentWidth(scale);
-      syncFill(scale);
     }
 
     function applyScale(next) {
@@ -322,14 +327,13 @@ window.__ModuleLoader__.load({
             return () => {
               window.removeEventListener('wheel', onWheel);
               // 把自己加过的样式全部收干净，回到宿主原样
-              const style = document.documentElement.style;
-              style.removeProperty('zoom');
-              style.removeProperty('--dsh-chat-user-width');
               const app = document.getElementById('root');
               if (app) {
+                app.style.removeProperty('zoom');
                 app.style.removeProperty('width');
                 app.style.removeProperty('height');
               }
+              document.documentElement.style.removeProperty('--dsh-chat-user-width');
             };
           }, 'ui-zoom: apply zoom'),
         );
