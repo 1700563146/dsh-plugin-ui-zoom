@@ -1,0 +1,2 @@
+# 统一用 LF：DSH 在 Windows 上读这些文件，换行符来回翻转只会让 diff 脏
+* text=auto eol=lf

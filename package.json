@@ -4,6 +4,15 @@
   "description": "Whole-interface zoom for DeepSeek Harness: 70%–160% via Ctrl+wheel, the DSH shortcut center, or an inline pill — with content-width compensation so zooming out shows more text instead of a narrower strip.",
   "type": "module",
   "license": "MIT",
+  "author": "1700563146",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1700563146/dsh-plugin-ui-zoom.git"
+  },
+  "homepage": "https://github.com/1700563146/dsh-plugin-ui-zoom#readme",
+  "bugs": {
+    "url": "https://github.com/1700563146/dsh-plugin-ui-zoom/issues"
+  },
   "icon": "./icon.svg",
   "keywords": [
     "deepseek",
