@@ -1,0 +1,46 @@
+{
+  "name": "dsh-plugin-ui-zoom",
+  "version": "0.1.0",
+  "description": "Whole-interface zoom for DeepSeek Harness: 70%–160% via Ctrl+wheel, the DSH shortcut center, or an inline pill — with content-width compensation so zooming out shows more text instead of a narrower strip.",
+  "type": "module",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "zoom",
+    "ui",
+    "accessibility"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}
