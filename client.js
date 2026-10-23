@@ -1,22 +1,16 @@
 /**
- * 界面缩放：把应用内容（#root）等比放大/缩小。
+ * 界面缩放：把整个界面等比放大/缩小。
  *
- * 为什么用 zoom、为什么加在 #root 而不是 documentElement：
- * - 宿主的字号大多是硬编码像素（`font-size:12px`），没有 rem 阶梯，改 token 只能覆盖
- *   少数几处，做不到「整界面」。
- * - zoom 参与布局，固定的菜单/遮罩、命中测试都会跟着变；而 transform:scale 会造出一个
- *   假的包含块，把 fixed 元素困在里面。
- * - **关键**：宿主的浮层全部 portal 到 document.body。若缩放加在 documentElement 上，
- *   body 也被缩放，浮层按 getBoundingClientRect（屏幕物理像素）算出来的 left/top 会写进
- *   一个被缩放的坐标系、被二次放大 —— 120% 就往右下偏 20%，菜单和悬停卡片跑出屏幕。
- *   加在 #root 上，body 留在缩放之外，坐标数学恢复正常；代价是浮层自身不跟着缩放。
- *
- * 两条硬规矩（都踩过）：
- * 1. 访问别的服务的属性前必须声明依赖：Cordis 对「已定义但没 inject 的服务」会直接抛
- *    `cannot get property "x" without inject`，不是返回 undefined。所以这里一律用
- *    ctx.inject([...], cb) 拿一个作用域，绝不直接摸 ctx.shortcuts。
- * 2. 滚轮不在快捷键中心的管辖范围（它只收键盘 code），只能自己监听；
- *    必须 passive: false，否则没法 preventDefault，会一边缩放一边滚页面。
+ * 做法有两层：
+ * 1. `document.documentElement` 上设 `zoom` —— 这是唯一能让布局正确的做法。
+ *    （试过只缩放 #root 再补 width/height：zoom 不缩放元素自身的盒子，补宽高反而把
+ *     可见尺寸压成 1/zoom，放大时贴左上、缩小时溢出右下。那个方向是错的，别再试。）
+ * 2. `body` 直接挂的那些浮层容器反向缩放 1/zoom。宿主的浮层全部 portal 到 body：
+ *      MenuSurface  createPortal(list, document.body)     ← 模型切换等菜单
+ *      HoverCard    createPortal(content, document.body)  ← 悬停卡片（含第三方插件的）
+ *    它们用 getBoundingClientRect 拿到「已含缩放」的屏幕像素，再写回 style.left；
+ *    若写入落在缩放坐标系里会被二次放大（120% 往右下偏 20%，出屏）。
+ *    反向缩放让有效缩放回到 1，坐标数学恢复；代价是浮层自身不跟着缩放。
  */
 window.__ModuleLoader__.load({
   id: 'dsh-plugin-ui-zoom',
@@ -88,18 +82,26 @@ window.__ModuleLoader__.load({
     const listeners = new Set();
     let current = DEFAULT;
 
-    // 缩放加在 #root（应用内容）而不是 documentElement 上，这是关键。
-    // 宿主所有的浮层都 portal 到 document.body：
+    // 缩放加在 documentElement 上 —— 这是布局唯一正确的做法。
+    // （试过加在 #root 上再加 width/height 反向补偿：zoom 不缩放元素自身的盒子，
+    //  补偿反而把可见尺寸压成 1/zoom，放大时贴左上、缩小时溢出右下。别再试。）
+    //
+    // 但整页缩放会让浮层跑出屏幕。宿主的浮层全部 portal 到 document.body：
     //   MenuSurface  createPortal(list, document.body)     ← 模型切换等菜单
     //   HoverCard    createPortal(content, document.body)  ← 悬停卡片（含第三方插件的）
-    // 它们用 getBoundingClientRect 算坐标（拿到的是屏幕物理像素），再写回 style.left。
-    // 如果缩放范围包含 body，这个 px 会在缩放坐标系里被二次放大：120% 就往右下偏 20%，
-    // 于是浮层跑出屏幕。把 body 留在缩放之外，坐标数学就恢复正常。
+    // 它们用 getBoundingClientRect 拿到「已含缩放」的屏幕像素，再写回 style.left；
+    // 若这个写入落在缩放坐标系里，就会被二次放大（120% 往右下偏 20%，出屏）。
     //
-    // 代价：浮层不跟着缩放（120% 的界面上，菜单仍是 100% 大小）。这是刻意的取舍 ——
-    // 位置正确 > 尺寸一致。
-    function appRoot() {
-      return document.getElementById('root');
+    // 解法：让 body 直接挂的那些浮层容器反向缩放 1/zoom，有效缩放回到 1 ——
+    // 坐标按屏幕像素写就是对的位置，代价是浮层自身不跟着放大。
+    const OVERLAY_RULE = 'body > :not(#root) { zoom: var(--dsh-ui-zoom-inverse, 1); }';
+
+    function installOverlayRule() {
+      const style = document.createElement('style');
+      style.setAttribute('data-dsh-ui-zoom', '');
+      style.textContent = OVERLAY_RULE;
+      document.head.appendChild(style);
+      return () => style.remove();
     }
 
     // 宿主正文栏的宽度是写死的：
@@ -122,19 +124,13 @@ window.__ModuleLoader__.load({
     }
 
     function paint(scale) {
-      const app = appRoot();
-      if (!app) return;
-
+      const root = document.documentElement;
       if (scale === 1) {
-        app.style.removeProperty('zoom');
-        app.style.removeProperty('width');
-        app.style.removeProperty('height');
+        root.style.removeProperty('zoom');
+        root.style.removeProperty('--dsh-ui-zoom-inverse');
       } else {
-        app.style.setProperty('zoom', String(scale));
-        // zoom 只乘元素自身的盒子，不会放大布局视口，所以要反向补偿宽高，
-        // 让这个盒子缩放后仍然正好铺满窗口（#root 原本是 height:100%）。
-        app.style.setProperty('width', `calc(100% / ${scale})`);
-        app.style.setProperty('height', `calc(100% / ${scale})`);
+        root.style.setProperty('zoom', String(scale));
+        root.style.setProperty('--dsh-ui-zoom-inverse', String(1 / scale));
       }
       syncContentWidth(scale);
     }
@@ -308,6 +304,8 @@ window.__ModuleLoader__.load({
         // 缩放本身：装上立即生效，卸载时把文档还原、把监听摘掉。
         safe('缩放与滚轮', () =>
           ctx.effect(() => {
+            // 浮层的反向缩放规则要先在，paint 立刻设的变量才有消费者
+            const removeOverlayRule = installOverlayRule();
             current = load();
             paint(current);
 
@@ -326,14 +324,12 @@ window.__ModuleLoader__.load({
 
             return () => {
               window.removeEventListener('wheel', onWheel);
+              removeOverlayRule();
               // 把自己加过的样式全部收干净，回到宿主原样
-              const app = document.getElementById('root');
-              if (app) {
-                app.style.removeProperty('zoom');
-                app.style.removeProperty('width');
-                app.style.removeProperty('height');
-              }
-              document.documentElement.style.removeProperty('--dsh-chat-user-width');
+              const style = document.documentElement.style;
+              style.removeProperty('zoom');
+              style.removeProperty('--dsh-ui-zoom-inverse');
+              style.removeProperty('--dsh-chat-user-width');
             };
           }, 'ui-zoom: apply zoom'),
         );

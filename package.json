@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-ui-zoom",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Whole-interface zoom for DeepSeek Harness: 70%–160% via Ctrl+wheel, the DSH shortcut center, or an inline pill — with content-width compensation so zooming out shows more text instead of a narrower strip.",
   "type": "module",
   "license": "MIT",
